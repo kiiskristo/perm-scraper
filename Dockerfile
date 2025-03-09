@@ -22,4 +22,4 @@ ENV OUTPUT_FILE=
 ENV SCHEDULER_INTERVAL=24
 
 # Run the scraper with the transformer
-CMD ["sh", "-c", "python perm_scraper.py --run-scheduler & python mongo_to_postgres.py --scheduler"]
+CMD ["sh", "-c", "python perm_scraper.py --run-scheduler"]
