@@ -52,28 +52,14 @@ def connect_mongodb():
 
 def connect_postgres():
     """Connect to PostgreSQL using environment variables"""
-    pg_host = os.getenv("POSTGRES_HOST")
-    pg_port = os.getenv("POSTGRES_PORT", "5432")
-    pg_db = os.getenv("POSTGRES_DB")
-    pg_user = os.getenv("POSTGRES_USER")
-    pg_password = os.getenv("POSTGRES_PASSWORD")
-    
-    if not all([pg_host, pg_db, pg_user, pg_password]):
-        logger.error("PostgreSQL connection environment variables not completely set")
-        return None
+    database_url = os.getenv("POSTGRES_URI")
     
     try:
-        conn = psycopg2.connect(
-            host=pg_host,
-            port=pg_port,
-            dbname=pg_db,
-            user=pg_user,
-            password=pg_password
-        )
-        logger.info("Successfully connected to PostgreSQL")
+        conn = psycopg2.connect(database_url)
+        logger.info("Successfully connected to PostgreSQL using DATABASE_URL")
         return conn
     except Exception as e:
-        logger.error(f"Failed to connect to PostgreSQL: {e}")
+        logger.error(f"Failed to connect to PostgreSQL using DATABASE_URL: {e}")
         return None
 
 def initialize_postgres_tables(pg_conn):
