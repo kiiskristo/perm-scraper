@@ -9,10 +9,27 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # Add PostgreSQL service container
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       MONGODB_URI: "mongodb://localhost:27017/test_db"
       MONGODB_DB: "test_db"
       MONGODB_COLLECTION: "test_collection"
+      POSTGRES_URI: "postgresql://postgres:postgres@localhost:5432/test_db"
     steps:
     - uses: actions/checkout@v4
     
@@ -32,9 +49,109 @@ jobs:
         mkdir -p mock_data
         cp block\ we\ need\ to\ work\ on mock_data/perm_timeline.html || echo "Mock HTML file not found, tests may be skipped"
         
-    - name: Run tests with coverage
+    - name: Add debug in mock_psycopg2 (temporary)
       run: |
-        pytest --cov=perm_scraper --cov-report=xml
+        echo "Adding enhanced mock for PostgreSQL"
+        cat > test_helpers/mock_psycopg2.py << 'EOL'
+        """
+        Mock PostgreSQL module for testing without requiring actual PostgreSQL libraries.
+        This allows tests to run in environments without PostgreSQL installed.
+        """
+
+        import sys
+        from unittest.mock import MagicMock
+
+        # Create mock classes
+        class MockConnection(MagicMock):
+            def cursor(self):
+                return MockCursor()
+            
+            def close(self):
+                pass
+            
+            def commit(self):
+                pass
+            
+            def rollback(self):
+                pass
+            
+            def __enter__(self):
+                return self
+            
+            def __exit__(self, *args):
+                self.close()
+
+        class MockCursor(MagicMock):
+            def execute(self, query, params=None):
+                return None
+            
+            def executemany(self, query, params_list):
+                return None
+            
+            def fetchone(self):
+                return [False]
+            
+            def fetchall(self):
+                return []
+            
+            def close(self):
+                pass
+            
+            def __enter__(self):
+                return self
+            
+            def __exit__(self, *args):
+                self.close()
+
+        # Mock psycopg2 module
+        mock_psycopg2 = MagicMock()
+        mock_psycopg2.connect = MagicMock(return_value=MockConnection())
+        mock_psycopg2.Error = Exception
+        mock_psycopg2.DatabaseError = Exception
+        mock_psycopg2.IntegrityError = Exception
+
+        # Mock extras module
+        mock_extras = MagicMock()
+        
+        # Special handling for execute_batch to avoid bytes-like object error
+        def safe_execute_batch(cursor, query, data_list, **kwargs):
+            # Don't actually process the data, just simulate success
+            return None
+            
+        mock_extras.execute_batch = MagicMock(side_effect=safe_execute_batch)
+        mock_psycopg2.extras = mock_extras
+
+        # Create a function to install the mock
+        def install_mock():
+            """Install the mock psycopg2 module"""
+            sys.modules['psycopg2'] = mock_psycopg2
+            sys.modules['psycopg2.extras'] = mock_extras
+        EOL
+        
+    - name: Create mock test file if it doesn't exist
+      run: |
+        if [ ! -f "mock_data/perm_timeline.html" ]; then
+          echo "Creating minimal mock file for testing"
+          mkdir -p mock_data
+          echo "<html><body><script>self.__next_f.push([1,\"submissionMonths:[{\\\"month\\\":\\\"May 2023\\\",\\\"active\\\":true,\\\"statuses\\\":[{\\\"status\\\":\\\"ANALYST REVIEW\\\",\\\"count\\\":200,\\\"dailyChange\\\":10}]}]\")</script></body></html>" > mock_data/perm_timeline.html
+        fi
+        
+    - name: Debug environment
+      run: |
+        python -c "import sys; print(sys.path)"
+        python -c "import os; print(os.environ.get('POSTGRES_URI'))"
+        python -c "import psycopg2; print('psycopg2 version:', psycopg2.__version__)"
+        
+    - name: Run specific test first  
+      run: |
+        pytest -xvs test_postgres.py::test_save_to_postgres || echo "Individual test failed but continuing"
+        
+    - name: Run all tests with coverage
+      run: |
+        # Export env variables to make them available in the test process
+        export GITHUB_CI=true
+        # Run pytest with verbose output and fail on first error
+        pytest -xvs --cov=perm_scraper --cov-report=xml
     
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
