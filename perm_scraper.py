@@ -7,9 +7,11 @@ import time
 import random
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from pymongo import MongoClient
 from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import execute_batch
 
 # Configure logging
 logging.basicConfig(
@@ -439,75 +441,305 @@ def save_html_backup(html, output_prefix="perm_backup", debug=False):
             logger.warning(f"Failed to save HTML backup: {e}")
         return None
 
-def connect_to_mongodb():
-    """Connect to MongoDB using environment variables"""
-    # Get MongoDB connection string from environment
-    mongo_uri = os.getenv("MONGODB_URI")
-    if not mongo_uri:
-        logger.error("MONGODB_URI environment variable not set")
-        return None
+def connect_postgres():
+    """Connect to PostgreSQL using environment variables"""
+    database_url = os.getenv("POSTGRES_URI")
     
     try:
-        # Connect to MongoDB
-        client = MongoClient(mongo_uri)
-        
-        # Test the connection
-        client.admin.command('ping')
-        logger.info("Successfully connected to MongoDB")
-        
-        return client
+        conn = psycopg2.connect(database_url)
+        logger.info("Successfully connected to PostgreSQL")
+        return conn
     except Exception as e:
-        logger.error(f"Failed to connect to MongoDB: {e}")
+        logger.error(f"Failed to connect to PostgreSQL: {e}")
         return None
 
-def save_to_mongodb(data):
-    """Save the extracted data to MongoDB"""
-    client = connect_to_mongodb()
-    if not client:
-        logger.error("Could not connect to MongoDB, data not saved")
+def initialize_postgres_tables(pg_conn):
+    """Create PostgreSQL tables if they don't exist"""
+    try:
+        with pg_conn.cursor() as cur:
+            # Daily progress table
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS daily_progress (
+                id SERIAL PRIMARY KEY,
+                date DATE NOT NULL,
+                day_of_week VARCHAR(10),
+                total_applications INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(date)
+            );
+            """)
+            
+            # Monthly status table
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS monthly_status (
+                id SERIAL PRIMARY KEY,
+                month VARCHAR(20) NOT NULL,
+                year INT NOT NULL,
+                status VARCHAR(50) NOT NULL,
+                count INT NOT NULL,
+                daily_change INT,
+                is_active BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(month, year, status)
+            );
+            """)
+            
+            # Summary stats table
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS summary_stats (
+                id SERIAL PRIMARY KEY,
+                record_date DATE NOT NULL,
+                total_applications INT,
+                pending_applications INT,
+                pending_percentage DECIMAL(5,2),
+                changes_today INT,
+                completed_today INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(record_date)
+            );
+            """)
+            
+            # Processing time percentiles table
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS processing_times (
+                id SERIAL PRIMARY KEY,
+                record_date DATE NOT NULL,
+                percentile_30 INT,
+                percentile_50 INT,
+                percentile_80 INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(record_date)
+            );
+            """)
+            
+            # Create views and indexes
+            cur.execute("""
+            CREATE OR REPLACE VIEW weekly_summary AS
+            SELECT 
+                DATE_TRUNC('week', date)::DATE AS week_start,
+                SUM(total_applications) AS total_applications,
+                AVG(total_applications) AS avg_daily_applications
+            FROM daily_progress
+            GROUP BY DATE_TRUNC('week', date)
+            ORDER BY week_start DESC;
+            """)
+            
+            cur.execute("""
+            CREATE OR REPLACE VIEW monthly_summary AS
+            SELECT 
+                year,
+                month,
+                SUM(count) AS total_count,
+                BOOL_OR(is_active) AS is_active
+            FROM monthly_status
+            GROUP BY year, month
+            ORDER BY year DESC, month DESC;
+            """)
+            
+            # Create indexes for better performance
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_daily_progress_date ON daily_progress(date);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_monthly_status_year_month ON monthly_status(year, month);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_summary_stats_date ON summary_stats(record_date);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_processing_times_date ON processing_times(record_date);")
+            
+            pg_conn.commit()
+            logger.info("PostgreSQL tables initialized successfully")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize PostgreSQL tables: {e}")
+        pg_conn.rollback()
+        return False
+
+def save_to_postgres(data):
+    """Save the extracted data directly to PostgreSQL"""
+    pg_conn = connect_postgres()
+    if not pg_conn:
+        logger.error("Could not connect to PostgreSQL, data not saved")
         return False
     
     try:
-        # Get database and collection names from environment or use defaults
-        db_name = os.getenv("MONGODB_DB", "perm_tracker")
-        collection_name = os.getenv("MONGODB_COLLECTION", "perm_data")
+        # Initialize tables if needed
+        if not initialize_postgres_tables(pg_conn):
+            logger.error("Failed to initialize PostgreSQL tables")
+            return False
         
-        # Access the database and collection
-        db = client[db_name]
-        collection = db[collection_name]
+        # Extract data from the results
+        daily_progress = data.get('dailyProgress', [])
+        monthly_data = data.get('submissionMonths', [])
+        summary_data = data.get('summary', {})
+        processing_times = data.get('processingTimes', {})
         
-        # Add timestamp if not already present
-        if "metadata" not in data:
-            data["metadata"] = {}
+        # Determine record date
+        if "todayDate" in data:
+            try:
+                record_date = datetime.strptime(data["todayDate"], "%Y-%m-%d").date()
+            except ValueError:
+                record_date = date.today()
+        else:
+            record_date = date.today()
         
-        data["metadata"]["timestamp"] = datetime.now().isoformat()
+        # Check if this record date already exists
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT EXISTS(SELECT 1 FROM summary_stats WHERE record_date = %s)", (record_date,))
+            already_exists = cur.fetchone()[0]
+            
+            if already_exists:
+                logger.info(f"Data for {record_date} already exists in PostgreSQL, updating...")
         
-        # Insert the data
-        result = collection.insert_one(data)
+        # Transform daily progress data
+        daily_records = []
+        for day_data in daily_progress:
+            try:
+                # Parse the date
+                date_str = day_data.get('date', '').split(' ')[0]  # Extract just the date part
+                
+                try:
+                    # Try parsing with the expected format
+                    date_obj = datetime.strptime(date_str, '%b/%d/%y').date()
+                except ValueError:
+                    # If that fails, try a more general approach
+                    try:
+                        # Try with different formats
+                        for fmt in ['%b/%d/%y', '%b/%d/%Y', '%B/%d/%y', '%B/%d/%Y']:
+                            try:
+                                date_obj = datetime.strptime(date_str, fmt).date()
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # If none of the formats worked
+                            logger.warning(f"Could not parse date: {date_str}")
+                            continue
+                    except Exception:
+                        logger.warning(f"Could not parse date: {date_str}")
+                        continue
+                
+                # Get day of week
+                day_of_week = date_obj.strftime('%A')
+                
+                # Create record
+                record = (
+                    date_obj,
+                    day_of_week,
+                    day_data.get('total', 0)
+                )
+                
+                daily_records.append(record)
+                
+            except Exception as e:
+                logger.error(f"Error processing daily data {day_data}: {e}")
         
-        logger.info(f"Data saved to MongoDB with ID: {result.inserted_id}")
+        # Transform monthly status data
+        monthly_records = []
+        for month_data in monthly_data:
+            try:
+                # Parse month and year
+                month_str = month_data.get('month', '')
+                parts = month_str.split()
+                if len(parts) != 2:
+                    logger.warning(f"Invalid month format: {month_str}")
+                    continue
+                
+                month_name = parts[0]
+                year = int(parts[1])
+                
+                # Process each status
+                for status in month_data.get('statuses', []):
+                    record = (
+                        month_name,
+                        year,
+                        status.get('status', ''),
+                        status.get('count', 0),
+                        status.get('dailyChange', 0),
+                        month_data.get('active', False)
+                    )
+                    
+                    monthly_records.append(record)
+                    
+            except Exception as e:
+                logger.error(f"Error processing monthly data {month_data}: {e}")
         
-        # Add a history entry with just the summary data for trending
-        history_collection = db["history"]
+        # Save to PostgreSQL
+        with pg_conn.cursor() as cur:
+            # Insert daily progress
+            if daily_records:
+                execute_batch(cur, """
+                INSERT INTO daily_progress (date, day_of_week, total_applications)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (date) DO UPDATE SET
+                    total_applications = EXCLUDED.total_applications,
+                    created_at = CURRENT_TIMESTAMP
+                """, daily_records)
+                logger.info(f"Inserted {len(daily_records)} daily progress records")
+            
+            # Insert monthly status
+            if monthly_records:
+                execute_batch(cur, """
+                INSERT INTO monthly_status (month, year, status, count, daily_change, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (month, year, status) DO UPDATE SET
+                    count = EXCLUDED.count,
+                    daily_change = EXCLUDED.daily_change,
+                    is_active = EXCLUDED.is_active,
+                    created_at = CURRENT_TIMESTAMP
+                """, monthly_records)
+                logger.info(f"Inserted {len(monthly_records)} monthly status records")
+            
+            # Insert summary stats
+            if summary_data:
+                cur.execute("""
+                INSERT INTO summary_stats (record_date, total_applications, pending_applications, 
+                                         pending_percentage, changes_today, completed_today)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (record_date) DO UPDATE SET
+                    total_applications = EXCLUDED.total_applications,
+                    pending_applications = EXCLUDED.pending_applications,
+                    pending_percentage = EXCLUDED.pending_percentage,
+                    changes_today = EXCLUDED.changes_today,
+                    completed_today = EXCLUDED.completed_today,
+                    created_at = CURRENT_TIMESTAMP
+                """, (
+                    record_date,
+                    summary_data.get('total_applications', 0),
+                    summary_data.get('pending_applications', 0),
+                    summary_data.get('pending_percentage', 0),
+                    summary_data.get('changes_today', 0),
+                    summary_data.get('completed_today', 0)
+                ))
+                logger.info("Inserted summary stats record")
+            
+            # Insert processing times
+            if processing_times:
+                cur.execute("""
+                INSERT INTO processing_times (record_date, percentile_30, percentile_50, percentile_80)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (record_date) DO UPDATE SET
+                    percentile_30 = EXCLUDED.percentile_30,
+                    percentile_50 = EXCLUDED.percentile_50,
+                    percentile_80 = EXCLUDED.percentile_80,
+                    created_at = CURRENT_TIMESTAMP
+                """, (
+                    record_date,
+                    processing_times.get('30_percentile'),
+                    processing_times.get('50_percentile'),
+                    processing_times.get('80_percentile')
+                ))
+                logger.info("Inserted processing times record")
+            
+            pg_conn.commit()
+            logger.info(f"Successfully saved data to PostgreSQL")
+            return True
         
-        history_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "date": data.get("todayDate", datetime.now().strftime("%Y-%m-%d")),
-            "summary": data.get("summary", {}),
-            "processingTimes": data.get("processingTimes", {})
-        }
-        
-        history_result = history_collection.insert_one(history_entry)
-        logger.info(f"History entry saved with ID: {history_result.inserted_id}")
-        
-        return True
-    
     except Exception as e:
-        logger.error(f"Error saving data to MongoDB: {e}")
+        logger.error(f"Error saving data to PostgreSQL: {e}")
+        if pg_conn:
+            pg_conn.rollback()
         return False
     
     finally:
-        client.close()
+        if pg_conn:
+            pg_conn.close()
 
 def run_scraper():
     """Main function to run the scraper with Railway configuration"""
@@ -537,11 +769,11 @@ def run_scraper():
             "timestamp": datetime.now().isoformat()
         }
         
-        # Save to MongoDB
-        if os.getenv("SAVE_TO_MONGODB", "true").lower() in ("true", "1", "yes"):
-            save_result = save_to_mongodb(data)
+        # Save to PostgreSQL
+        if os.getenv("SAVE_TO_POSTGRES", "true").lower() in ("true", "1", "yes"):
+            save_result = save_to_postgres(data)
             if not save_result:
-                logger.warning("Failed to save data to MongoDB")
+                logger.warning("Failed to save data to PostgreSQL")
         
         # Save to local JSON file if configured
         output_file = os.getenv("OUTPUT_FILE")
@@ -582,7 +814,7 @@ def main():
     parser.add_argument("--delay", type=float, default=2.0, help="Delay between retries in seconds")
     parser.add_argument("--save-backup", "-b", action="store_true", help="Save a backup of the HTML content")
     parser.add_argument("--auto-backup", "-a", action="store_true", help="Automatically save backup when fetching from URL")
-    parser.add_argument("--save-mongodb", "-m", action="store_true", help="Save data to MongoDB")
+    parser.add_argument("--save-postgres", action="store_true", help="Save data to PostgreSQL")
     parser.add_argument("--scheduler-interval", type=int, default=24, help="Hours between runs when using scheduler")
     
     args = parser.parse_args()
@@ -602,7 +834,7 @@ def main():
         # Set environment variables for the scheduled runs
         os.environ["DEBUG"] = "true" if args.debug else "false"
         os.environ["SAVE_BACKUP"] = "true" if args.save_backup else "false"
-        os.environ["SAVE_TO_MONGODB"] = "true" if args.save_mongodb else "true"  # Default to true
+        os.environ["SAVE_TO_POSTGRES"] = "true" if args.save_postgres else "true"  # Default to true
         
         if args.output:
             os.environ["OUTPUT_FILE"] = args.output
@@ -690,11 +922,11 @@ def main():
                 logger.info(f"Found {marker} at position {marker_pos}")
                 break
     
-    # Save to MongoDB if requested
-    if args.save_mongodb:
-        save_result = save_to_mongodb(data)
+    # Save to PostgreSQL if requested
+    if args.save_postgres:
+        save_result = save_to_postgres(data)
         if not save_result:
-            logger.warning("Failed to save data to MongoDB")
+            logger.warning("Failed to save data to PostgreSQL")
     
     # Output the data
     if data:
