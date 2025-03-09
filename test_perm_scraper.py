@@ -2,7 +2,7 @@ import os
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from perm_scraper import extract_perm_data, fetch_html_from_url, save_to_mongodb
+from perm_scraper import extract_perm_data, fetch_html_from_url, save_to_postgres, run_scraper
 
 # Test data paths
 MOCK_HTML_PATH = os.path.join(os.path.dirname(__file__), "mock_data", "perm_timeline.html")
@@ -71,23 +71,17 @@ def test_fetch_html_from_url(mock_get, mock_html):
     assert 'headers' in kwargs
     assert 'timeout' in kwargs
 
-@patch('perm_scraper.connect_to_mongodb')
-def test_save_to_mongodb(mock_connect):
-    """Test saving data to MongoDB with a mock client"""
-    # Create mock MongoDB client and collections
-    mock_client = MagicMock()
-    mock_db = MagicMock()
-    mock_collection = MagicMock()
-    mock_history_collection = MagicMock()
+@patch('perm_scraper.connect_postgres')
+def test_save_to_postgres(mock_connect):
+    """Test saving data to PostgreSQL with a mock client"""
+    # Create mock PostgreSQL connection and cursor
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
     
     # Set up the mocks with proper return values
-    mock_connect.return_value = mock_client
-    mock_client.__getitem__.return_value = mock_db
-    mock_db.__getitem__.side_effect = lambda x: mock_collection if x == 'test_collection' else mock_history_collection
-    
-    # Configure mock insert operations
-    mock_collection.insert_one.return_value.inserted_id = "mock_id"
-    mock_history_collection.insert_one.return_value.inserted_id = "history_id"
+    mock_connect.return_value = mock_conn
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    mock_cursor.fetchone.return_value = [False]  # For EXISTS query
     
     # Sample data to save
     data = {
@@ -103,30 +97,42 @@ def test_save_to_mongodb(mock_connect):
             "30_percentile": 486,
             "50_percentile": 493,
             "80_percentile": 506
-        }
+        },
+        "dailyProgress": [
+            {"date": "Mar/05/25 Wed", "total": 100}
+        ],
+        "submissionMonths": [
+            {
+                "month": "Mar 2025",
+                "active": True,
+                "statuses": [
+                    {"status": "ANALYST REVIEW", "count": 200, "dailyChange": 10}
+                ]
+            }
+        ]
     }
     
     # Mock environment setup
     with patch.dict('os.environ', {
-        'MONGODB_URI': 'mongodb://localhost:27017',
-        'MONGODB_DB': 'test_db',
-        'MONGODB_COLLECTION': 'test_collection'
+        'POSTGRES_URI': 'postgresql://localhost:5432/test_db'
     }):
-        # Call the function
-        result = save_to_mongodb(data)
-        
-        # Verify the function returned success
-        assert result is True
-        
-        # Verify connect_to_mongodb was called
-        mock_connect.assert_called_once()
-        
-        # Verify the data was saved to the correct collections
-        mock_collection.insert_one.assert_called_once()
-        mock_history_collection.insert_one.assert_called_once()
-        
-        # Verify the history collection was also updated
-        mock_db.__getitem__.assert_any_call("history")
+        # Also patch initialize_postgres_tables to return True
+        with patch('perm_scraper.initialize_postgres_tables', return_value=True):
+            # Call the function
+            result = save_to_postgres(data)
+            
+            # Verify the function returned success
+            assert result is True
+            
+            # Verify connect_postgres was called
+            mock_connect.assert_called_once()
+            
+            # Verify cursor execute was called multiple times
+            assert mock_cursor.execute.call_count > 0
+            
+            # Verify connection was committed and closed
+            mock_conn.commit.assert_called_once()
+            mock_conn.close.assert_called_once()
 
 def test_integration_extract_and_verify(mock_html):
     """Integration test to extract data and verify key metrics"""
@@ -146,3 +152,68 @@ def test_integration_extract_and_verify(mock_html):
                                summary.get("total_applications", 1) * 100, 2)
     assert abs(summary.get("pending_percentage", 0) - expected_percentage) < 0.01, \
         "Pending percentage calculation should be accurate"
+
+# Add tests for the updated run_scraper function
+@patch('perm_scraper.fetch_html_from_url')
+@patch('perm_scraper.extract_perm_data')
+@patch('perm_scraper.save_to_postgres')
+def test_run_scraper_with_postgres(mock_save_postgres, mock_extract, mock_fetch):
+    """Test run_scraper with PostgreSQL integration"""
+    # Setup the mocks
+    mock_fetch.return_value = "<html>Test HTML</html>"
+    mock_extract.return_value = {"summary": {"total_applications": 100, "pending_applications": 50, 
+                                             "pending_percentage": 50.0, "changes_today": 10, "completed_today": 5}}
+    mock_save_postgres.return_value = True
+    
+    # Set environment variables
+    os.environ["SAVE_TO_POSTGRES"] = "true"
+    
+    # Call the function
+    result = run_scraper()
+    
+    # Assertions
+    assert result is True
+    mock_fetch.assert_called_once()
+    mock_extract.assert_called_once()
+    mock_save_postgres.assert_called_once()
+
+# Test saving to file
+@patch('perm_scraper.fetch_html_from_url')
+@patch('perm_scraper.extract_perm_data')
+@patch('perm_scraper.save_to_postgres')
+def test_run_scraper_with_file_output(mock_save_postgres, mock_extract, mock_fetch, tmp_path):
+    """Test run_scraper with file output"""
+    # Setup the mocks
+    mock_fetch.return_value = "<html>Test HTML</html>"
+    mock_extract.return_value = {"summary": {"total_applications": 100, "pending_applications": 50, 
+                                             "pending_percentage": 50.0, "changes_today": 10, "completed_today": 5}}
+    
+    # Set environment variables
+    output_file = str(tmp_path / "test_output.json")
+    os.environ["OUTPUT_FILE"] = output_file
+    
+    # Call the function
+    result = run_scraper()
+    
+    # Assertions
+    assert result is True
+    assert os.path.exists(output_file)
+    
+    # Check file content
+    with open(output_file, 'r') as f:
+        data = json.load(f)
+        assert "summary" in data
+        assert data["summary"]["total_applications"] == 100
+
+# Test error handling
+@patch('perm_scraper.fetch_html_from_url')
+def test_run_scraper_error_handling(mock_fetch):
+    """Test run_scraper error handling"""
+    # Setup the mock to raise an exception
+    mock_fetch.side_effect = Exception("Network error")
+    
+    # Call the function
+    result = run_scraper()
+    
+    # Assertion
+    assert result is False
