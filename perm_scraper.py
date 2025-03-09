@@ -8,7 +8,6 @@ import random
 import os
 import logging
 from datetime import datetime, date
-from pymongo import MongoClient
 from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import execute_batch
