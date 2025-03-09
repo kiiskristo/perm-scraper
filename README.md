@@ -20,6 +20,7 @@ A robust web scraper for PERM (Permanent Labor Certification) processing time da
 - MongoDB database (Atlas or self-hosted)
 - Railway account (https://railway.app)
 
+
 ### Environment Variables
 
 Copy the `.env.example` file to `.env` and fill in your MongoDB connection details:
