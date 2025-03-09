@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies (add psycopg2-binary)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt psycopg2-binary
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY perm_scraper.py .
