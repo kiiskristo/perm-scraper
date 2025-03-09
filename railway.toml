@@ -3,6 +3,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/"
+# Disable healthcheck by removing healthcheckPath
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
