@@ -2,12 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies (add psycopg2-binary)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt psycopg2-binary
 
 # Copy source code
 COPY perm_scraper.py .
+COPY mongo_to_postgres.py .
 
 # Create a directory for backups if enabled
 RUN mkdir -p backups
@@ -20,5 +21,5 @@ ENV SAVE_TO_MONGODB=true
 ENV OUTPUT_FILE=
 ENV SCHEDULER_INTERVAL=24
 
-# Run the script with scheduler
-CMD ["python", "perm_scraper.py", "--run-scheduler"]
+# Run the scraper with the transformer
+CMD ["sh", "-c", "python perm_scraper.py --run-scheduler & python mongo_to_postgres.py --scheduler"]
