@@ -115,7 +115,8 @@ def test_initialize_postgres_tables_failure():
 def test_save_to_postgres(sample_perm_data):
     """Test saving data to PostgreSQL"""
     with patch('perm_scraper.connect_postgres') as mock_connect, \
-         patch('perm_scraper.initialize_postgres_tables') as mock_init:
+         patch('perm_scraper.initialize_postgres_tables') as mock_init, \
+         patch('psycopg2.extras.execute_batch', lambda *args, **kwargs: None):  # Critical patch
         
         # Setup mocks
         mock_conn = MagicMock()
