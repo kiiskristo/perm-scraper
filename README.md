@@ -1,5 +1,9 @@
 # PERM Timeline Scraper
 
+[![Tests](https://github.com/kiiskristo/perm-scraper/actions/workflows/main.yml/badge.svg)](https://github.com/kiiskristo/perm-scraper/actions/workflows/main.yml)
+
+[![codecov](https://codecov.io/gh/kiiskristo/perm-scraper/branch/main/graph/badge.svg)](https://codecov.io/gh/kiiskristo/perm-scraper)
+
 A robust web scraper for PERM (Permanent Labor Certification) processing time data, designed to run on Railway with MongoDB integration.
 
 ## Features
