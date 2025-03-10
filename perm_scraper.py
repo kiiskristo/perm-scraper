@@ -376,6 +376,44 @@ def extract_perm_data(html, debug=False):
             if debug:
                 logger.error(f"Failed to calculate summary statistics: {str(e)}")
     
+    # Extract daily progress data
+    daily_progress = []
+    today_date = None  # Initialize today_date
+    
+    # Process daily progress data
+    for day_data in daily_data:
+        date_str = day_data.get('0', '')
+        total = day_data.get('total', 0)
+        
+        # Check if this entry is for today (it will contain "(today)")
+        if "(today)" in date_str:
+            # Extract today's date from this entry
+            date_parts = date_str.replace(" (today)", "").split('/')
+            month = date_parts[0]
+            day = date_parts[1]
+            year = "20" + date_parts[2]
+            today_date = f"{year}-{month_num_map.get(month, '01'):02d}-{int(day):02d}"
+            
+        daily_progress.append({
+            "date": date_str,
+            "total": total
+        })
+    
+    # If we found today's date, use it, otherwise try to use the first entry's date
+    if not today_date and daily_progress:
+        # Use the latest entry (usually first in the array) as today
+        first_date = daily_progress[0]['date']
+        if 'today' in first_date:
+            # Extract today's date
+            date_parts = first_date.split('(')[0].strip().split('/')
+            month = date_parts[0]
+            day = date_parts[1]
+            year = "20" + date_parts[2]
+            today_date = f"{year}-{month_num_map.get(month, '01'):02d}-{int(day):02d}"
+    
+    # Set today's date in the result
+    result['todayDate'] = today_date
+    
     return result
 
 def fetch_html_from_url(url, debug=False, user_agent=None, retry_count=3, retry_delay=2):
@@ -569,14 +607,35 @@ def save_to_postgres(data):
         summary_data = data.get('summary', {})
         processing_times = data.get('processingTimes', {})
         
-        # Determine record date
-        if "todayDate" in data:
+        # Get the date for this data
+        record_date = data.get('todayDate')
+        
+        # If todayDate is missing, try to derive it from the first daily progress entry
+        if not record_date and 'dailyProgress' in data and data['dailyProgress']:
+            first_entry = data['dailyProgress'][0]
+            date_str = first_entry['date']
+            
+            # Check if this contains "(today)"
+            if "(today)" in date_str:
+                date_str = date_str.replace(" (today)", "")
+            
+            # Parse this date
             try:
-                record_date = datetime.strptime(data["todayDate"], "%Y-%m-%d").date()
-            except ValueError:
-                record_date = date.today()
-        else:
-            record_date = date.today()
+                date_parts = date_str.split(' ')[0].split('/')
+                month = date_parts[0]
+                day = int(date_parts[1])
+                year = int("20" + date_parts[2])
+                
+                # Convert month name to number
+                month_map = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+                             "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+                month_num = month_map.get(month, 1)
+                
+                # Set the record date
+                record_date = f"{year}-{month_num:02d}-{day:02d}"
+                logger.info(f"Derived record date from daily progress: {record_date}")
+            except Exception as e:
+                logger.error(f"Error deriving date from '{date_str}': {e}")
         
         # Check if this record date already exists
         with pg_conn.cursor() as cur:
@@ -625,6 +684,11 @@ def save_to_postgres(data):
                 )
                 
                 daily_records.append(record)
+                
+                # Add this to your save_to_postgres function where daily progress dates are processed
+                logger.debug(f"Processing daily progress date: '{date_str}'")
+                # After parsing the date
+                logger.debug(f"Parsed daily progress date: {date_obj.isoformat()}")
                 
             except Exception as e:
                 logger.error(f"Error processing daily data {day_data}: {e}")
