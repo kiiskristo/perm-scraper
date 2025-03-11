@@ -11,6 +11,7 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import execute_batch
+import sys
 
 # Configure logging
 logging.basicConfig(
@@ -803,12 +804,8 @@ def save_to_postgres(data):
         if pg_conn:
             pg_conn.close()
 
-def run_scraper():
+def run_scraper(url, debug=False):
     """Main function to run the scraper with Railway configuration"""
-    # Get URL from environment variable
-    url = os.getenv("PERM_URL", "https://permtimeline.com")
-    debug = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
-    
     logger.info(f"Starting PERM scraper for URL: {url}")
     
     try:
@@ -862,7 +859,9 @@ def run_scraper():
 def main():
     """Command-line interface for the scraper"""
     parser = argparse.ArgumentParser(description="Extract PERM data")
-    input_group = parser.add_mutually_exclusive_group(required=True)
+    
+    # Make these optional instead of required in a mutually exclusive group
+    input_group = parser.add_argument_group('input options')
     input_group.add_argument("--file", "-i", help="HTML file to process")
     input_group.add_argument("--url", "-u", help="URL to scrape (e.g., https://permtimeline.com)")
     input_group.add_argument("--run-scheduler", action="store_true", help="Run as a scheduled service")
@@ -885,35 +884,21 @@ def main():
     if args.debug:
         logger.setLevel(logging.DEBUG)
     
-    # Handle scheduler mode
-    if args.run_scheduler:
-        import schedule
-        
-        # Schedule the scraper to run at the specified interval
-        interval_hours = args.scheduler_interval
-        logger.info(f"Starting scheduler, will run every {interval_hours} hours")
-        
-        # Set environment variables for the scheduled runs
-        os.environ["DEBUG"] = "true" if args.debug else "false"
-        os.environ["SAVE_BACKUP"] = "true" if args.save_backup else "false"
-        os.environ["SAVE_TO_POSTGRES"] = "true" if args.save_postgres else "true"  # Default to true
-        
-        if args.output:
-            os.environ["OUTPUT_FILE"] = args.output
-        
-        # Run once immediately
-        run_scraper()
-        
-        # Schedule future runs
-        schedule.every(interval_hours).hours.do(run_scraper)
-        
-        # Keep the script running
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
-        
-        return
+    # Better approach - require explicit configuration 
+    if not args.file and not args.url and not args.run_scheduler:
+        args.url = os.getenv("PERM_URL")
+        if not args.url:
+            logger.error("No input source specified and PERM_URL environment variable not set")
+            logger.error("Please set PERM_URL in environment or use --url/--file arguments")
+            sys.exit(1)
+        logger.info(f"Using URL from environment: {args.url}")
     
+    # Handle scheduler mode (deprecated)
+    if args.run_scheduler:
+        logger.info("Scheduler mode is deprecated. Please use Railway cron jobs instead.")
+        run_scraper(args.url, args.debug)
+        return
+        
     # Get HTML content - either from file or URL
     try:
         if args.file:
