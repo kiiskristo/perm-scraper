@@ -804,8 +804,15 @@ def save_to_postgres(data):
         if pg_conn:
             pg_conn.close()
 
-def run_scraper(url, debug=False):
+def run_scraper(url=None, debug=False):
     """Main function to run the scraper with Railway configuration"""
+    # If URL is not provided, try to get it from environment
+    if url is None:
+        url = os.getenv("PERM_URL")
+        if not url:
+            logger.error("URL not provided and PERM_URL environment variable not set")
+            return False
+    
     logger.info(f"Starting PERM scraper for URL: {url}")
     
     try:

@@ -121,15 +121,16 @@ def test_run_scraper_with_postgres(mock_save_postgres, mock_extract, mock_fetch)
     """Test run_scraper with PostgreSQL integration"""
     # Setup the mocks
     mock_fetch.return_value = "<html>Test HTML</html>"
-    mock_extract.return_value = {"summary": {"total_applications": 100, "pending_applications": 50, 
-                                             "pending_percentage": 50.0, "changes_today": 10, "completed_today": 5}}
+    mock_extract.return_value = {"summary": {"total_applications": 100, "pending_applications": 50,
+                                         "pending_percentage": 50.0, "changes_today": 10, "completed_today": 5}}
     mock_save_postgres.return_value = True
-    
+
     # Set environment variables
     os.environ["SAVE_TO_POSTGRES"] = "true"
+    test_url = "https://test-perm.example.com"  # Add test URL
     
-    # Call the function
-    result = run_scraper()
+    # Call the function with URL parameter
+    result = run_scraper(url=test_url)
     
     # Assertions
     assert result is True
@@ -145,15 +146,16 @@ def test_run_scraper_with_file_output(mock_save_postgres, mock_extract, mock_fet
     """Test run_scraper with file output"""
     # Setup the mocks
     mock_fetch.return_value = "<html>Test HTML</html>"
-    mock_extract.return_value = {"summary": {"total_applications": 100, "pending_applications": 50, 
-                                             "pending_percentage": 50.0, "changes_today": 10, "completed_today": 5}}
-    
+    mock_extract.return_value = {"summary": {"total_applications": 100, "pending_applications": 50,
+                                         "pending_percentage": 50.0, "changes_today": 10, "completed_today": 5}}
+
     # Set environment variables
     output_file = str(tmp_path / "test_output.json")
     os.environ["OUTPUT_FILE"] = output_file
+    test_url = "https://test-perm.example.com"  # Add test URL
     
-    # Call the function
-    result = run_scraper()
+    # Call the function with URL parameter
+    result = run_scraper(url=test_url)
     
     # Assertions
     assert result is True
@@ -171,9 +173,10 @@ def test_run_scraper_error_handling(mock_fetch):
     """Test run_scraper error handling"""
     # Setup the mock to raise an exception
     mock_fetch.side_effect = Exception("Network error")
+    test_url = "https://test-perm.example.com"  # Add test URL
     
-    # Call the function
-    result = run_scraper()
+    # Call the function with URL parameter
+    result = run_scraper(url=test_url)
     
     # Assertion
     assert result is False
