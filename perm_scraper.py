@@ -649,46 +649,32 @@ def save_to_postgres(data):
         daily_records = []
         for day_data in daily_progress:
             try:
-                # Log the original data
-                logger.info(f"Processing day data: {day_data}")
-                
                 # Parse the date
                 date_str = day_data.get('date', '').split(' ')[0]  # Extract just the date part
-                logger.info(f"Original date string: '{day_data.get('date', '')}', extracted part: '{date_str}'")
                 
                 try:
                     # Try parsing with the expected format
                     date_obj = datetime.strptime(date_str, '%b/%d/%y').date()
-                    logger.info(f"Successfully parsed with format '%b/%d/%y': {date_obj}")
                 except ValueError:
                     # If that fails, try a more general approach
-                    logger.warning(f"Failed to parse '{date_str}' with primary format, trying alternatives")
                     try:
                         # Try with different formats
                         for fmt in ['%b/%d/%y', '%b/%d/%Y', '%B/%d/%y', '%B/%d/%Y']:
                             try:
                                 date_obj = datetime.strptime(date_str, fmt).date()
-                                logger.info(f"Successfully parsed with format '{fmt}': {date_obj}")
                                 break
                             except ValueError:
-                                logger.debug(f"Format '{fmt}' failed for '{date_str}'")
                                 continue
                         else:
                             # If none of the formats worked
                             logger.warning(f"Could not parse date: {date_str}")
                             continue
-                    except Exception as parse_err:
-                        logger.warning(f"Could not parse date '{date_str}': {parse_err}")
+                    except Exception:
+                        logger.warning(f"Could not parse date: {date_str}")
                         continue
                 
                 # Get day of week
                 day_of_week = date_obj.strftime('%A')
-                logger.info(f"Calculated day of week for {date_obj}: {day_of_week}")
-                
-                # Verify day of week is correct
-                correct_day = date_obj.strftime('%A')
-                if day_of_week != correct_day:
-                    logger.error(f"WEEKDAY MISMATCH: {date_obj} should be {correct_day}, but got {day_of_week}")
                 
                 # Create record
                 record = (
@@ -697,26 +683,14 @@ def save_to_postgres(data):
                     day_data.get('total', 0)
                 )
                 
-                logger.info(f"Adding record: date={date_obj}, weekday={day_of_week}, total={day_data.get('total', 0)}")
                 daily_records.append(record)
                 
-                # Add this to your save_to_postgres function where daily progress dates are processed
+                # Keep these minimal debug logs which were part of the original code
                 logger.debug(f"Processing daily progress date: '{date_str}'")
-                # After parsing the date
                 logger.debug(f"Parsed daily progress date: {date_obj.isoformat()}")
                 
             except Exception as e:
                 logger.error(f"Error processing daily data {day_data}: {e}")
-        
-        # Add this right before the executemany call
-        logger.info("=== FINAL DAILY RECORDS BEFORE DATABASE INSERT ===")
-        for i, (date_obj, weekday, total) in enumerate(daily_records):
-            logger.info(f"Record {i+1}: date={date_obj}, weekday={weekday}, total={total}")
-            
-            # Verify weekday consistency
-            correct_weekday = date_obj.strftime('%A')
-            if weekday != correct_weekday:
-                logger.error(f"FINAL WEEKDAY MISMATCH: {date_obj} should be {correct_weekday}, got {weekday}")
         
         # Transform monthly status data
         monthly_records = []
@@ -814,22 +788,6 @@ def save_to_postgres(data):
                     processing_times.get('80_percentile')
                 ))
                 logger.info("Inserted processing times record")
-            
-            # After the execute_batch for daily_records
-            logger.info(f"Inserted {len(daily_records)} daily progress records")
-            
-            # Add this verification block (will write to a log file)
-            try:
-                check_file = "date_weekday_check.log"
-                with open(check_file, "w") as f:
-                    f.write("DATE,WEEKDAY,CORRECT_WEEKDAY,MISMATCH\n")
-                    for date_obj, weekday, total in daily_records:
-                        correct_weekday = date_obj.strftime('%A')
-                        mismatch = "YES" if weekday != correct_weekday else "NO"
-                        f.write(f"{date_obj},{weekday},{correct_weekday},{mismatch}\n")
-                logger.info(f"Wrote date/weekday verification to {check_file}")
-            except Exception as e:
-                logger.error(f"Error writing verification file: {e}")
             
             pg_conn.commit()
             logger.info(f"Successfully saved data to PostgreSQL")
