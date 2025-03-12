@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import execute_batch
 import sys
+import traceback
 
 # Configure logging
 logging.basicConfig(
@@ -325,20 +326,48 @@ def extract_perm_data(html, debug=False):
         if debug:
             logger.warning("Could not find daily progress data pattern")
     
-    # Extract the percentile processing times table
-    percentiles_pattern = r'\\\"30%\\\".*?\\\"≤ \\\"(\d+).*?\\\"50%\\\".*?\\\"≤ \\\"(\d+).*?\\\"80%\\\".*?\\\"≤ \\\"(\d+)'
-    percentiles_match = re.search(percentiles_pattern, target_block)
-    
-    if percentiles_match:
-        result["processingTimes"] = {
-            "30_percentile": int(percentiles_match.group(1)),
-            "50_percentile": int(percentiles_match.group(2)),
-            "80_percentile": int(percentiles_match.group(3))
-        }
+    # Extract the percentile processing times
+    if debug:
+        logger.info("Searching for processing times table...")
+
+    try:
+        # Look for the table containing the percentile data
+        table_marker = 'class="flex flex-col items-center border-t-[4px] border-r-[4px]'
+        table_pos = html.find(table_marker)
+        
+        if table_pos > 0:
+            if debug:
+                logger.info(f"Found percentile table at position {table_pos}")
+            
+            # Extract a section that should contain the entire table
+            table_section = html[table_pos:table_pos+2000]
+            
+            # Find all values with the pattern "≤ <!-- -->NUMBER<!-- --> days"
+            value_pattern = r'≤\s*<!--\s*-->(\d+)<!--\s*-->\s*days'
+            values = re.findall(value_pattern, table_section)
+            
+            if values and len(values) >= 3:
+                if debug:
+                    logger.info(f"Found processing time values: {values[:3]}")
+                
+                result["processingTimes"] = {
+                    "30_percentile": int(values[0]),
+                    "50_percentile": int(values[1]),
+                    "80_percentile": int(values[2])
+                }
+                
+                if debug:
+                    logger.info(f"Extracted processing times: "
+                              f"30% ≤ {result['processingTimes']['30_percentile']} days, "
+                              f"50% ≤ {result['processingTimes']['50_percentile']} days, "
+                              f"80% ≤ {result['processingTimes']['80_percentile']} days")
+            elif debug:
+                logger.warning(f"Found percentile table but couldn't extract all values (found {len(values) if values else 0}, need 3)")
+        elif debug:
+            logger.warning("Could not find percentile table in HTML")
+    except Exception as e:
         if debug:
-            logger.info(f"Found processing times: 30% ≤ {result['processingTimes']['30_percentile']} days, "
-                      f"50% ≤ {result['processingTimes']['50_percentile']} days, "
-                      f"80% ≤ {result['processingTimes']['80_percentile']} days")
+            logger.error(f"Error extracting processing times: {str(e)}")
     
     # Calculate summary statistics if we have the data
     if "submissionMonths" in result and result["submissionMonths"]:
