@@ -408,8 +408,8 @@ def extract_perm_data(html, debug=False):
     
     # If we found today's date, use it, otherwise try to use the first entry's date
     if not today_date and daily_progress:
-        # Use the latest entry (usually first in the array) as today
-        first_date = daily_progress[0]['date']
+        # Use the last entry (usually first in the array) as today
+        first_date = daily_progress[-1]['date']
         if 'today' in first_date:
             # Extract today's date
             date_parts = first_date.split('(')[0].strip().split('/')
@@ -420,6 +420,12 @@ def extract_perm_data(html, debug=False):
     
     # Set today's date in the result
     result['todayDate'] = today_date
+    
+    if debug:
+        logger.info(f"Extracted todayDate: {result.get('todayDate')}")
+
+    if 'todayDate' not in result and debug:
+        logger.warning("Failed to extract todayDate from HTML")
     
     return result
 
@@ -617,10 +623,11 @@ def save_to_postgres(data):
         # Get the date for this data
         record_date = data.get('todayDate')
         
-        # If todayDate is missing, try to derive it from the first daily progress entry
+        # If todayDate is missing, try to derive it from the LATEST daily progress entry
         if not record_date and 'dailyProgress' in data and data['dailyProgress']:
-            first_entry = data['dailyProgress'][0]
-            date_str = first_entry['date']
+            # Use the LAST entry (most recent/today) rather than the first (oldest) entry
+            last_entry = data['dailyProgress'][-1]  # Use -1 to get last item instead of [0]
+            date_str = last_entry['date']
             
             # Check if this contains "(today)"
             if "(today)" in date_str:
@@ -633,14 +640,12 @@ def save_to_postgres(data):
                 day = int(date_parts[1])
                 year = int("20" + date_parts[2])
                 
-                # Convert month name to number
-                month_map = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-                             "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
-                month_num = month_map.get(month, 1)
+                # Convert month name to number - use the global month_num_map instead of redefining
+                month_num = month_num_map.get(month, 1)
                 
                 # Set the record date
                 record_date = f"{year}-{month_num:02d}-{day:02d}"
-                logger.info(f"Derived record date from daily progress: {record_date}")
+                logger.info(f"Derived record date from LATEST daily progress entry: {record_date}")
             except Exception as e:
                 logger.error(f"Error deriving date from '{date_str}': {e}")
         
