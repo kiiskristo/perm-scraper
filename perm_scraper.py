@@ -26,6 +26,12 @@ logger = logging.getLogger("perm_scraper")
 # Load environment variables
 load_dotenv()
 
+# Month name to number mapping
+month_num_map = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
+}
+
 def extract_perm_data(html, debug=False):
     """Extract and parse PERM data from HTML"""
     if debug:
@@ -867,23 +873,15 @@ def main():
     """Command-line interface for the scraper"""
     parser = argparse.ArgumentParser(description="Extract PERM data")
     
-    # Make these optional instead of required in a mutually exclusive group
+    # Input options
     input_group = parser.add_argument_group('input options')
     input_group.add_argument("--file", "-i", help="HTML file to process")
-    input_group.add_argument("--url", "-u", help="URL to scrape (e.g., https://permtimeline.com)")
-    input_group.add_argument("--run-scheduler", action="store_true", help="Run as a scheduled service")
-    
-    parser.add_argument("--output", "-o", help="Save output to file instead of printing")
+    input_group.add_argument("--url", "-u", help="URL to scrape")
     parser.add_argument("--debug", "-d", action="store_true", help="Enable debug output")
-    parser.add_argument("--pretty", "-p", action="store_true", help="Pretty print the JSON output")
-    parser.add_argument("--extract-raw", "-r", action="store_true", help="Extract raw daily data as string")
-    parser.add_argument("--user-agent", help="Custom User-Agent string for HTTP requests")
-    parser.add_argument("--retry", type=int, default=3, help="Number of retry attempts for URL fetching")
-    parser.add_argument("--delay", type=float, default=2.0, help="Delay between retries in seconds")
-    parser.add_argument("--save-backup", "-b", action="store_true", help="Save a backup of the HTML content")
-    parser.add_argument("--auto-backup", "-a", action="store_true", help="Automatically save backup when fetching from URL")
-    parser.add_argument("--save-postgres", action="store_true", help="Save data to PostgreSQL")
-    parser.add_argument("--scheduler-interval", type=int, default=24, help="Hours between runs when using scheduler")
+    
+    # Keep essential options only
+    parser.add_argument("--output", "-o", help="Save output to file")
+    parser.add_argument("--save-postgres", action="store_true", help="Override to save data to PostgreSQL")
     
     args = parser.parse_args()
     
@@ -891,109 +889,46 @@ def main():
     if args.debug:
         logger.setLevel(logging.DEBUG)
     
-    # Better approach - require explicit configuration 
-    if not args.file and not args.url and not args.run_scheduler:
-        args.url = os.getenv("PERM_URL")
-        if not args.url:
-            logger.error("No input source specified and PERM_URL environment variable not set")
-            logger.error("Please set PERM_URL in environment or use --url/--file arguments")
-            sys.exit(1)
-        logger.info(f"Using URL from environment: {args.url}")
+    # Set URL from env or args
+    url = args.url or os.getenv("PERM_URL")
+    if not url and not args.file:
+        logger.error("No input source specified and PERM_URL environment variable not set")
+        sys.exit(1)
     
-    # Handle scheduler mode (deprecated)
-    if args.run_scheduler:
-        logger.info("Scheduler mode is deprecated. Please use Railway cron jobs instead.")
-        run_scraper(args.url, args.debug)
-        return
-        
-    # Get HTML content - either from file or URL
-    try:
-        if args.file:
-            logger.info(f"Reading file {args.file}...")
-            with open(args.file, 'r', encoding='utf-8') as f:
-                html = f.read()
-            logger.info(f"Read {len(html)} bytes")
-        else:  # args.url
-            logger.info(f"Fetching URL {args.url}...")
-            html = fetch_html_from_url(
-                args.url, 
-                debug=args.debug, 
-                user_agent=args.user_agent,
-                retry_count=args.retry,
-                retry_delay=args.delay
-            )
-    except Exception as e:
-        logger.error(f"Error obtaining HTML content: {e}")
-        return
+    # Override environment settings with CLI flags
+    if args.output:
+        os.environ["OUTPUT_FILE"] = args.output
     
-    # Option to save a backup of the HTML content
-    if args.save_backup or (args.url and args.auto_backup):
-        backup_file = save_html_backup(html, debug=args.debug)
-        if backup_file and args.debug:
-            logger.info(f"HTML backup saved to {backup_file}")
-    
-    # Extract data
-    data = extract_perm_data(html, debug=args.debug)
-    
-    # Add metadata about the source
-    if args.file:
-        data["metadata"] = {"source": "file", "filename": args.file, "timestamp": datetime.now().isoformat()}
-    elif args.url:
-        data["metadata"] = {"source": "url", "url": args.url, "timestamp": datetime.now().isoformat()}
-    
-    # Special handling for raw data extraction
-    if args.extract_raw and "dailyProgress" not in data:
-        logger.info("Extracting raw daily data without parsing...")
-        
-        # Try to find daily data context
-        # Update marker to more dynamically find current dates
-        current_month = time.strftime("%b")
-        current_year = time.strftime("%y")
-        
-        # Create markers based on current date and the past few days
-        current_day = int(time.strftime("%d"))
-        day_markers = []
-        
-        # Add current and previous days as markers
-        for day_offset in range(14):  # Look at current and up to 13 days back
-            day = current_day - day_offset
-            if day > 0:
-                day_markers.append(f"{current_month}/{day:02d}/{current_year}")
-        
-        # Also add some fixed markers as fallback
-        day_markers.extend(["Mar/01/25", "Feb/24/25", "Feb/25/25"])
-        
-        for marker in day_markers:
-            marker_pos = html.find(marker)
-            if marker_pos > 0:
-                # Find a reasonable chunk around this
-                start_pos = max(0, marker_pos - 200)
-                end_pos = min(len(html), marker_pos + 2000)
-                
-                raw_chunk = html[start_pos:end_pos]
-                data["raw_daily_chunk"] = raw_chunk
-                
-                logger.info(f"Found {marker} at position {marker_pos}")
-                break
-    
-    # Save to PostgreSQL if requested
     if args.save_postgres:
-        save_result = save_to_postgres(data)
-        if not save_result:
-            logger.warning("Failed to save data to PostgreSQL")
-    
-    # Output the data
-    if data:
-        json_output = json.dumps(data, indent=2 if args.pretty else None)
+        os.environ["SAVE_TO_POSTGRES"] = "true"
         
-        if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(json_output)
-            logger.info(f"Data saved to {args.output}")
-        else:
-            print(json_output)
+    # Use the file input path if specified
+    if args.file:
+        logger.info(f"Reading file {args.file}...")
+        with open(args.file, 'r', encoding='utf-8') as f:
+            html = f.read()
+            
+        # Process the file using extract_perm_data
+        data = extract_perm_data(html, debug=args.debug)
+        data["metadata"] = {"source": "file", "filename": args.file, "timestamp": datetime.now().isoformat()}
+        
+        # Save to PostgreSQL if configured
+        if os.getenv("SAVE_TO_POSTGRES", "false").lower() in ("true", "1", "yes") or args.save_postgres:
+            save_result = save_to_postgres(data)
+            if not save_result:
+                logger.warning("Failed to save data to PostgreSQL")
+        
+        # Save to file if configured
+        output_file = os.getenv("OUTPUT_FILE") or args.output
+        if output_file:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Data saved to {output_file}")
+            
+        return True
     else:
-        logger.error("No PERM data found in HTML")
+        # Use the standard run_scraper for URL fetching
+        return run_scraper(url=url, debug=args.debug)
 
 if __name__ == "__main__":
     main()

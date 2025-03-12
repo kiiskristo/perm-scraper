@@ -1,119 +1,57 @@
-# PERM Timeline Scraper
+# PERM Timeline Data Scraper
 
-[![Tests](https://github.com/kiiskristo/perm-scraper/actions/workflows/main.yml/badge.svg)](https://github.com/kiiskristo/perm-scraper/actions/workflows/main.yml)
-
-[![codecov](https://codecov.io/gh/kiiskristo/perm-scraper/branch/main/graph/badge.svg)](https://codecov.io/gh/kiiskristo/perm-scraper)
-
-A robust web scraper for PERM (Permanent Labor Certification) processing time data, designed to run on Railway with MongoDB integration.
+A Python tool that extracts and analyzes PERM application processing data from the Department of Labor's website, storing results in PostgreSQL.
 
 ## Features
 
-- Scrapes PERM timeline data from https://permtimeline.com
-- Stores historical data in MongoDB for tracking changes over time
-- Runs automatically on a schedule using cron jobs
-- Built for deployment on Railway
+- Extracts detailed PERM application processing data
+- Stores data in PostgreSQL database
+- Calculates summary statistics and processing time percentiles
+- Creates daily progress history and status breakdowns
+- Deployed with Railway for automated scheduled execution
+- Supports environment variable configuration
 
 ## Setup
 
 ### Prerequisites
 
-- MongoDB database (Atlas or self-hosted)
-- Railway account (https://railway.app)
+- Python 3.9+
+- PostgreSQL database
+- Docker (optional, for containerized deployment)
 
+### Installation
 
-### Environment Variables
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/perm-scraper.git
+   cd perm-scraper
+   ```
 
-Copy the `.env.example` file to `.env` and fill in your MongoDB connection details:
-
-```
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/perm_tracker
-MONGODB_DB=perm_tracker
-MONGODB_COLLECTION=perm_data
-```
-
-Additional configuration options:
-
-```
-PERM_URL=https://permtimeline.com
-DEBUG=false
-SAVE_BACKUP=false
-SAVE_TO_MONGODB=true
-OUTPUT_FILE=
-SCHEDULER_INTERVAL=24
-```
-
-### Local Development
-
-1. Install dependencies:
+2. Install dependencies:
    ```
    pip install -r requirements.txt
    ```
 
-2. Run the scraper:
+3. Create a `.env` file based on the example:
    ```
-   python perm_scraper.py --url https://permtimeline.com --debug --save-mongodb
-   ```
-
-### Running with Scheduler
-
-To run with the built-in scheduler locally:
-```
-python perm_scraper.py --run-scheduler --scheduler-interval 24 --debug
-```
-
-## Deployment to Railway
-
-### Option 1: Using the Railway CLI
-
-1. Install the Railway CLI:
-   ```
-   npm i -g @railway/cli
+   cp .env.example .env
    ```
 
-2. Login to Railway:
+4. Edit the `.env` file with your settings:
    ```
-   railway login
-   ```
+   # PostgreSQL Connection
+   POSTGRES_URI=postgresql://username:password@host:port/dbname
 
-3. Link to your project:
-   ```
-   railway link
-   ```
-
-4. Deploy the application:
-   ```
-   railway up
+   # Scraper Settings
+   PERM_URL=<your_target_url>
+   DEBUG=false
+   SAVE_BACKUP=false
+   SAVE_TO_POSTGRES=true
+   OUTPUT_FILE=
    ```
 
-### Option 2: GitHub Integration
+## Usage
 
-1. Push this repository to GitHub
-2. Create a new Railway project
-3. Connect to your GitHub repository
-4. Railway will automatically deploy the application
+### Direct Execution
 
-### Setting Environment Variables in Railway
-
-After deployment, set the required environment variables in the Railway dashboard:
-
-1. Go to your project in the Railway dashboard
-2. Navigate to the "Variables" tab
-3. Add all the environment variables from your `.env` file
-
-## MongoDB Data Structure
-
-The scraper saves two types of documents:
-
-1. Full data capture (in the main collection):
-   - Complete snapshot of all PERM data
-   - Includes monthly statistics, daily progress, processing times
-   - Timestamped with metadata
-
-2. History entries (in the "history" collection):
-   - Compact summary data for trending
-   - Processing time percentiles
-   - Daily changes
-
-## License
-
-MIT License
+Run the scraper once:
