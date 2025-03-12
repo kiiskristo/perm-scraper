@@ -3,6 +3,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 from perm_scraper import extract_perm_data, fetch_html_from_url, save_to_postgres, run_scraper
+import tempfile
 
 # Test data paths
 MOCK_HTML_PATH = os.path.join(os.path.dirname(__file__), "mock_data", "perm_timeline.html")
@@ -128,6 +129,11 @@ def test_run_scraper_with_postgres(mock_save_postgres, mock_extract, mock_fetch)
     # Set environment variables
     os.environ["SAVE_TO_POSTGRES"] = "true"
     test_url = "https://test-perm.example.com"  # Add test URL
+    
+    # Add this code to create the output directory
+    output_dir = tempfile.mkdtemp()
+    output_file = os.path.join(output_dir, "output.json")
+    os.environ["OUTPUT_FILE"] = output_file
     
     # Call the function with URL parameter
     result = run_scraper(url=test_url)

@@ -389,7 +389,7 @@ def extract_perm_data(html, debug=False):
     
     # Process daily progress data
     for day_data in daily_data:
-        date_str = day_data.get('0', '')
+        date_str = day_data.get('date', day_data.get('0', ''))
         total = day_data.get('total', 0)
         
         # Check if this entry is for today (it will contain "(today)")
