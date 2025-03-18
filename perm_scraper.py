@@ -606,12 +606,12 @@ def initialize_postgres_tables(pg_conn):
             cur.execute("""
             CREATE OR REPLACE VIEW monthly_summary AS
             SELECT 
-                year,
-                month,
-                SUM(count) AS total_count,
-                BOOL_OR(is_active) AS is_active
-            FROM monthly_status
-            GROUP BY year, month
+                DATE_TRUNC('year', date)::DATE as year,
+                DATE_TRUNC('month', date)::DATE as month,
+                SUM(total_applications) AS total_applications,
+                AVG(total_applications) AS avg_daily_applications
+            FROM daily_progress
+            GROUP BY DATE_TRUNC('year', date), DATE_TRUNC('month', date)
             ORDER BY year DESC, month DESC;
             """)
             

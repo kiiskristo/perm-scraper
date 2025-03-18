@@ -33,6 +33,7 @@ coverage.xml
 
 # Backup files
 perm_backup_*.html
+*.xlsx
 
 # MongoDB
 *.mongodb
